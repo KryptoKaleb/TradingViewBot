@@ -1,0 +1,13 @@
+
+services:
+  - type: web
+    name: bybit-webhook-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn main:app --bind 0.0.0.0:10000"
+    envVars:
+      - key: BYBIT_API_KEY
+        sync: false
+      - key: BYBIT_API_SECRET
+        sync: false
