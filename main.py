@@ -6,7 +6,6 @@ import time
 import os
 
 app = Flask(__name__)
-application = app  # For Gunicorn
 
 API_KEY = os.getenv("BYBIT_API_KEY")
 API_SECRET = os.getenv("BYBIT_API_SECRET")
