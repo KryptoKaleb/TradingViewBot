@@ -38,3 +38,5 @@ def webhook():
     else:
         return jsonify({"error": "Invalid action"}), 400
     return jsonify(result)
+    if __name__ == "__main__":
+    app.run(debug=True)
