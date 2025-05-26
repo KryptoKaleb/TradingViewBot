@@ -1,41 +1,77 @@
 from flask import Flask, request, jsonify
-import hmac
-import hashlib
 import requests
-import time
 import os
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("BYBIT_API_KEY")
-API_SECRET = os.getenv("BYBIT_API_SECRET")
+# Environment variables (already loaded in Render)
+API_KEY = os.environ.get("BYBIT_API_KEY")
+API_SECRET = os.environ.get("BYBIT_API_SECRET")
 BASE_URL = "https://api-testnet.bybit.com"
 
+# Simple in-memory position tracker
+position_state = "FLAT"  # could be "LONG" or "FLAT"
+
+# === PLACE ORDER FUNCTION ===
 def place_order(symbol, side, qty):
-    endpoint = "/v2/private/order/create"
-    url = BASE_URL + endpoint
-    timestamp = str(int(time.time() * 1000))
-    params = f"api_key={API_KEY}&symbol={symbol}&side={side}&order_type=Market&qty={qty}&time_in_force=GoodTillCancel&timestamp={timestamp}"
-    sign = hmac.new(bytes(API_SECRET, "utf-8"), params.encode("utf-8"), hashlib.sha256).hexdigest()
-    final_params = params + f"&sign={sign}"
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    response = requests.post(url, data=final_params, headers=headers)
+    print(f"Placing {side} order: {qty} {symbol}")
+
+    endpoint = f"{BASE_URL}/v5/order/create"
+    headers = {
+        "X-BYBIT-API-KEY": API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "category": "linear",
+        "symbol": symbol,
+        "side": side.capitalize(),  # "Buy" or "Sell"
+        "orderType": "Market",
+        "qty": qty,
+        "timeInForce": "GoodTillCancel"
+    }
+
+    response = requests.post(endpoint, json=data, headers=headers)
+    print("Bybit Response:", response.text)
     return response.json()
 
-@app.route("/webhook", methods=["POST"])
+
+# === WEBHOOK HANDLER ===
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.json
-    if data is None:
-        return jsonify({"error": "No data received"}), 400
+    global position_state
+    data = request.get_json()
+
+    print("Webhook received:", data)
+
     action = data.get("action")
-    symbol = data.get("symbol", "SOLUSDT")
-    qty = float(data.get("qty", 1))
-    if action == "BUY":
-        result = place_order(symbol, "Buy", qty)
-    elif action == "SELL":
-        result = place_order(symbol, "Sell", qty)
-    else:
-        return jsonify({"error": "Invalid action"}), 400
-    return jsonify(result)
-    if __name__ == "__main__":
-        app.run(debug=True)
+    symbol = data.get("symbol")
+    qty = data.get("qty")
+
+    if not action or not symbol or not qty:
+        return jsonify({"error": "Invalid webhook data"}), 400
+
+    if action.upper() == "BUY":
+        if position_state == "LONG":
+            print("Already in LONG, skipping buy")
+            return jsonify({"message": "Already in position, no buy placed"}), 200
+
+        place_order(symbol, "Buy", qty)
+        position_state = "LONG"
+        return jsonify({"message": "Buy order placed"}), 200
+
+    elif action.upper() == "SELL":
+        if position_state == "FLAT":
+            print("Already flat, skipping sell")
+            return jsonify({"message": "No open position to sell"}), 200
+
+        place_order(symbol, "Sell", qty)
+        position_state = "FLAT"
+        return jsonify({"message": "Sell order placed"}), 200
+
+    return jsonify({"error": "Unknown action"}), 400
+
+
+# Optional: Basic root endpoint
+@app.route('/')
+def index():
+    return "Scalping Bot Webhook Live"
