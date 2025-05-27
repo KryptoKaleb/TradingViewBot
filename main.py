@@ -2,30 +2,44 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import logging
+import time
+import hmac
+import hashlib
+import json
 
 app = Flask(__name__)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables (already loaded in Render)
+# Load environment variables
 API_KEY = os.environ.get("BYBIT_API_KEY")
 API_SECRET = os.environ.get("BYBIT_API_SECRET")
 BASE_URL = "https://api-testnet.bybit.com"
 
-# Simple in-memory position tracker
+# In-memory position state
 position_state = "FLAT"  # can be "LONG" or "FLAT"
+
+# === SIGNATURE GENERATOR ===
+def generate_signature(secret, timestamp, recv_window, payload):
+    param_str = f"{timestamp}{API_KEY}{recv_window}{payload}"
+    return hmac.new(
+        bytes(secret, "utf-8"),
+        msg=bytes(param_str, "utf-8"),
+        digestmod=hashlib.sha256
+    ).hexdigest()
 
 # === PLACE ORDER FUNCTION ===
 def place_order(symbol, side, qty):
     logging.info(f"Placing {side} order: {qty} {symbol}")
 
     endpoint = f"{BASE_URL}/v5/order/create"
-    headers = {
-        "X-BYBIT-API-KEY": API_KEY,
-        "Content-Type": "application/json"
-    }
-    data = {
+    url = endpoint
+
+    recv_window = "5000"
+    timestamp = str(int(time.time() * 1000))
+
+    body = {
         "category": "linear",
         "symbol": symbol,
         "side": side.capitalize(),  # "Buy" or "Sell"
@@ -34,8 +48,20 @@ def place_order(symbol, side, qty):
         "timeInForce": "GoodTillCancel"
     }
 
+    payload_str = json.dumps(body, separators=(',', ':'))
+
+    signature = generate_signature(API_SECRET, timestamp, recv_window, payload_str)
+
+    headers = {
+        "X-BYBIT-API-KEY": API_KEY,
+        "X-BYBIT-SIGN": signature,
+        "X-BYBIT-TIMESTAMP": timestamp,
+        "X-BYBIT-RECV-WINDOW": recv_window,
+        "Content-Type": "application/json"
+    }
+
     try:
-        response = requests.post(endpoint, json=data, headers=headers)
+        response = requests.post(url, data=payload_str, headers=headers)
         response.raise_for_status()
         logging.info("Bybit API response: %s", response.text)
         return response.json()
@@ -83,7 +109,7 @@ def webhook():
     logging.warning("Unknown action received: %s", action)
     return jsonify({"error": "Unknown action"}), 400
 
-# === OPTIONAL: Basic root endpoint ===
+# === ROOT ENDPOINT ===
 @app.route('/')
 def index():
     return "Scalping Bot Webhook is Live"
