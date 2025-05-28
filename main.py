@@ -5,65 +5,52 @@ import logging
 import time
 import hmac
 import hashlib
-import json
+import base64
+import urllib.parse
 
 app = Flask(__name__)
-
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 
-# Load environment variables
-API_KEY = os.environ.get("BYBIT_API_KEY")
-API_SECRET = os.environ.get("BYBIT_API_SECRET")
-BASE_URL = "https://api-testnet.bybit.com"
+# Load Kraken API keys
+API_KEY = os.environ.get("KRAKEN_API_KEY")
+API_SECRET = os.environ.get("KRAKEN_API_SECRET")
 
-# In-memory position state
+# Position tracking (same logic you had before)
 position_state = "FLAT"  # can be "LONG" or "FLAT"
 
-# === SIGNATURE GENERATOR ===
-def generate_signature(secret, timestamp, recv_window, payload):
-    param_str = f"{timestamp}{API_KEY}{recv_window}{payload}"
-    return hmac.new(
-        bytes(secret, "utf-8"),
-        msg=bytes(param_str, "utf-8"),
-        digestmod=hashlib.sha256
-    ).hexdigest()
-
-# === PLACE ORDER FUNCTION ===
+# === KRAKEN ORDER FUNCTION ===
 def place_order(symbol, side, qty):
-    logging.info(f"Placing {side} order: {qty} {symbol}")
+    logging.info(f"Placing {side.upper()} order for {qty} {symbol}")
 
-    endpoint = f"{BASE_URL}/v5/order/create"
-    url = endpoint
+    url_path = "/0/private/AddOrder"
+    api_url = "https://api.kraken.com" + url_path
+    nonce = str(int(time.time() * 1000))
 
-    recv_window = "5000"
-    timestamp = str(int(time.time() * 1000))
-
-    body = {
-        "category": "linear",
-        "symbol": symbol,
-        "side": side.capitalize(),  # "Buy" or "Sell"
-        "orderType": "Market",
-        "qty": qty,
-        "timeInForce": "GoodTillCancel"
+    # Kraken order payload
+    data = {
+        "nonce": nonce,
+        "ordertype": "market",
+        "type": side.lower(),  # 'buy' or 'sell'
+        "volume": str(qty),
+        "pair": symbol  # Kraken pair, e.g., 'SOLUSD'
     }
 
-    payload_str = json.dumps(body, separators=(',', ':'))
-
-    signature = generate_signature(API_SECRET, timestamp, recv_window, payload_str)
+    post_data = urllib.parse.urlencode(data)
+    message = (nonce + post_data).encode()
+    sha256_hash = hashlib.sha256(message).digest()
+    secret = base64.b64decode(API_SECRET)
+    signature = hmac.new(secret, url_path.encode() + sha256_hash, hashlib.sha512)
+    api_sign = base64.b64encode(signature.digest())
 
     headers = {
-        "X-BYBIT-API-KEY": API_KEY,
-        "X-BYBIT-SIGN": signature,
-        "X-BYBIT-TIMESTAMP": timestamp,
-        "X-BYBIT-RECV-WINDOW": recv_window,
-        "Content-Type": "application/json"
+        "API-Key": API_KEY,
+        "API-Sign": api_sign.decode()
     }
 
     try:
-        response = requests.post(url, data=payload_str, headers=headers)
+        response = requests.post(api_url, headers=headers, data=data)
         response.raise_for_status()
-        logging.info("Bybit API response: %s", response.text)
+        logging.info("Kraken API response: %s", response.text)
         return response.json()
     except requests.exceptions.RequestException as e:
         logging.error(f"Order failed: {e}")
@@ -82,7 +69,7 @@ def webhook():
         return jsonify({"error": "Invalid JSON"}), 400
 
     action = data.get("action")
-    symbol = data.get("symbol")
+    symbol = data.get("symbol")  # Must match Kraken pair format (e.g., 'SOLUSD')
     qty = data.get("qty")
 
     if not all([action, symbol, qty]):
@@ -93,7 +80,7 @@ def webhook():
             logging.info("Already in LONG position — skipping buy.")
             return jsonify({"message": "Already in position, no buy placed"}), 200
 
-        place_order(symbol, "Buy", qty)
+        place_order(symbol, "buy", qty)
         position_state = "LONG"
         return jsonify({"message": "Buy order placed"}), 200
 
@@ -102,7 +89,7 @@ def webhook():
             logging.info("Already in FLAT position — skipping sell.")
             return jsonify({"message": "No open position to sell"}), 200
 
-        place_order(symbol, "Sell", qty)
+        place_order(symbol, "sell", qty)
         position_state = "FLAT"
         return jsonify({"message": "Sell order placed"}), 200
 
@@ -112,4 +99,4 @@ def webhook():
 # === ROOT ENDPOINT ===
 @app.route('/')
 def index():
-    return "Scalping Bot Webhook is Live"
+    return "Kraken Scalping Bot Webhook is Live"
